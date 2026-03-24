@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wsl-gpu-guard"
+version = "0.1.0"
+description = "Graceful GPU hot-removal protection for WSL2 on NVIDIA Optimus (hybrid graphics) laptops"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Kyle Brodeur", email = "kyle@brodeur.me" }]
+requires-python = ">=3.11"
+keywords = ["wsl", "wsl2", "nvidia", "cuda", "gpu", "watchdog", "optimus", "linux"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
+# No runtime dependencies — stdlib only (tomllib, ctypes, signal, threading, etc.)
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+wsl-gpu-guard = "wsl_gpu_guard.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kylebrodeur/wsl-gpu-guard"
+Repository = "https://github.com/kylebrodeur/wsl-gpu-guard"
+Issues = "https://github.com/kylebrodeur/wsl-gpu-guard/issues"
+
+[tool.hatch.build.targets.wheel]
+# packages includes src/wsl_gpu_guard/ and all subdirs (scripts/, etc.)
+packages = ["src/wsl_gpu_guard"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/", "README.md", "LICENSE"]
