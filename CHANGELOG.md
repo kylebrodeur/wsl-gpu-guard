@@ -11,6 +11,28 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.0] – 2026-03-24
+
+### Added
+
+- `cuda-setup` subcommand — discovers nvidia wheel lib dirs across configured Python
+  environments and writes `~/.config/environment.d/cuda-wheels.conf` so that
+  `libcublas.so.12` is available on `LD_LIBRARY_PATH` for every new systemd user session.
+  No per-project path hacks needed.
+- `--venv PATH` flag on `cuda-setup` — adds a venv root (or project directory containing
+  `.venv`) to the scan. Stored in config so future runs work without the flag.
+- `[cuda]` section in `~/.config/wsl-gpu-guard/config.toml` with `extra_venvs` list.
+- `CudaConfig` dataclass and `save_cuda_venvs()` helper in `config.py`.
+- `cmd_install` now runs `cuda-setup` automatically as part of the one-shot setup.
+
+### Fixed
+
+- Systemd service was crashing on every start because `_build_service_unit` placed CLI
+  flags before the `watch` subcommand (e.g. `wsl-gpu-guard --signal SIGHUP watch`). Fixed
+  to `wsl-gpu-guard watch --signal SIGHUP`.
+
+---
+
 ## [0.1.0] – 2026-03-24
 
 ### Added
@@ -44,5 +66,6 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Systemd user service generation from current config (auto-restarts on failure).
 - PyPI-ready packaging: wheel bundles the PowerShell script; zero runtime deps.
 
-[Unreleased]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kylebrodeur/wsl-gpu-guard/releases/tag/v0.1.0

@@ -8,7 +8,13 @@ from unittest.mock import patch
 
 import pytest
 
-from wsl_gpu_guard.cli import _build_parser, _build_service_unit, _find_executable
+from wsl_gpu_guard.cli import (
+    _build_parser,
+    _build_service_unit,
+    _discover_nvidia_wheel_libs,
+    _find_executable,
+    _write_cuda_env_file,
+)
 from wsl_gpu_guard import config as _cfg
 
 
@@ -123,10 +129,13 @@ class TestBuildServiceUnit:
             unit = _build_service_unit(cfg)
         assert unit.count("watch") >= 1
         assert "ExecStart=" in unit
-        # The 'watch' subcommand should appear at the end of ExecStart line
+        # The 'watch' subcommand should appear immediately after the executable
         for line in unit.splitlines():
             if line.startswith("ExecStart="):
-                assert line.endswith("watch")
+                assert " watch" in line
+                # flags come after 'watch', not before
+                watch_pos = line.index(" watch")
+                assert not any(f in line[:watch_pos] for f in ("--signal", "--interval", "--pid"))
 
     def test_gpu_only_flag_included(self):
         cfg = self._cfg_with(gpu_only=True, pids=[])
@@ -197,3 +206,118 @@ class TestFindExecutable:
         ):
             result = _find_executable()
         assert result == str(fake_bin)
+
+
+# ---------------------------------------------------------------------------
+# cuda-setup parser
+# ---------------------------------------------------------------------------
+
+class TestCudaSetupParser:
+    def setup_method(self):
+        self.parser = _build_parser()
+
+    def test_cuda_setup_subcommand(self):
+        args = self.parser.parse_args(["cuda-setup"])
+        assert args.command == "cuda-setup"
+        assert args.venv is None
+
+    def test_cuda_setup_venv_flag(self):
+        args = self.parser.parse_args(["cuda-setup", "--venv", "/tmp/myenv"])
+        assert args.venv == "/tmp/myenv"
+
+
+# ---------------------------------------------------------------------------
+# _discover_nvidia_wheel_libs
+# ---------------------------------------------------------------------------
+
+class TestDiscoverNvidiaWheelLibs:
+    def _make_nvidia_lib(self, sp: Path, package: str) -> Path:
+        lib_dir = sp / "nvidia" / package / "lib"
+        lib_dir.mkdir(parents=True)
+        return lib_dir
+
+    def test_finds_dirs_in_site_packages(self, tmp_path):
+        sp = tmp_path / "site-packages"
+        cublas = self._make_nvidia_lib(sp, "cublas")
+        cudnn  = self._make_nvidia_lib(sp, "cudnn")
+        cfg = _cfg.GuardConfig()
+        with (
+            patch("wsl_gpu_guard.cli.site.getsitepackages", return_value=[str(sp)]),
+            patch("wsl_gpu_guard.cli.site.getusersitepackages", return_value=""),
+        ):
+            result = _discover_nvidia_wheel_libs(cfg)
+        assert cublas in result
+        assert cudnn in result
+
+    def test_finds_dirs_in_extra_venv(self, tmp_path):
+        venv = tmp_path / "myenv"
+        sp = venv / "lib" / "python3.12" / "site-packages"
+        cublas = self._make_nvidia_lib(sp, "cublas")
+        cfg = _cfg.GuardConfig(cuda=_cfg.CudaConfig(extra_venvs=[str(venv)]))
+        with (
+            patch("wsl_gpu_guard.cli.site.getsitepackages", return_value=[]),
+            patch("wsl_gpu_guard.cli.site.getusersitepackages", return_value=""),
+        ):
+            result = _discover_nvidia_wheel_libs(cfg)
+        assert cublas in result
+
+    def test_deduplicates_symlinked_paths(self, tmp_path):
+        sp1 = tmp_path / "sp1"
+        sp2 = tmp_path / "sp2"
+        real = self._make_nvidia_lib(sp1, "cublas")
+        # sp2/nvidia/cublas/lib -> real
+        (sp2 / "nvidia" / "cublas").mkdir(parents=True)
+        (sp2 / "nvidia" / "cublas" / "lib").symlink_to(real)
+        cfg = _cfg.GuardConfig()
+        with (
+            patch("wsl_gpu_guard.cli.site.getsitepackages", return_value=[str(sp1), str(sp2)]),
+            patch("wsl_gpu_guard.cli.site.getusersitepackages", return_value=""),
+        ):
+            result = _discover_nvidia_wheel_libs(cfg)
+        assert len(result) == 1
+
+    def test_empty_when_nothing_found(self, tmp_path):
+        cfg = _cfg.GuardConfig()
+        with (
+            patch("wsl_gpu_guard.cli.site.getsitepackages", return_value=[str(tmp_path)]),
+            patch("wsl_gpu_guard.cli.site.getusersitepackages", return_value=""),
+        ):
+            result = _discover_nvidia_wheel_libs(cfg)
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _write_cuda_env_file
+# ---------------------------------------------------------------------------
+
+class TestWriteCudaEnvFile:
+    def test_writes_ld_library_path(self, tmp_path):
+        with (
+            patch("wsl_gpu_guard.cli._CUDA_ENV_DIR", tmp_path),
+            patch("wsl_gpu_guard.cli._CUDA_ENV_FILE", tmp_path / "cuda-wheels.conf"),
+        ):
+            _write_cuda_env_file([Path("/a/lib"), Path("/b/lib")])
+        text = (tmp_path / "cuda-wheels.conf").read_text()
+        assert "LD_LIBRARY_PATH=/a/lib:/b/lib:$LD_LIBRARY_PATH" in text
+
+    def test_no_broken_empty_prefix_when_no_dirs(self, tmp_path):
+        with (
+            patch("wsl_gpu_guard.cli._CUDA_ENV_DIR", tmp_path),
+            patch("wsl_gpu_guard.cli._CUDA_ENV_FILE", tmp_path / "cuda-wheels.conf"),
+        ):
+            _write_cuda_env_file([])
+        text = (tmp_path / "cuda-wheels.conf").read_text()
+        assert "LD_LIBRARY_PATH=:" not in text
+
+    def test_idempotent(self, tmp_path):
+        env_file = tmp_path / "cuda-wheels.conf"
+        dirs = [Path("/x/lib")]
+        with (
+            patch("wsl_gpu_guard.cli._CUDA_ENV_DIR", tmp_path),
+            patch("wsl_gpu_guard.cli._CUDA_ENV_FILE", env_file),
+        ):
+            _write_cuda_env_file(dirs)
+            content1 = env_file.read_text()
+            _write_cuda_env_file(dirs)
+            content2 = env_file.read_text()
+        assert content1 == content2
