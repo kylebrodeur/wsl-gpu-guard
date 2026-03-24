@@ -20,6 +20,7 @@ import logging
 import os
 import shutil
 import signal
+import site
 import subprocess
 import sys
 import time
@@ -37,6 +38,8 @@ from wsl_gpu_guard.watchdog import (
 logger = logging.getLogger("wsl_gpu_guard")
 
 _SERVICE_NAME = "wsl-gpu-guard"
+_CUDA_ENV_DIR  = Path.home() / ".config" / "environment.d"
+_CUDA_ENV_FILE = _CUDA_ENV_DIR / "cuda-wheels.conf"
 _TASK_NAME = "wsl-gpu-guard-ac-disconnect"
 _SERVICE_DIR = Path.home() / ".config" / "systemd" / "user"
 _SERVICE_FILE = _SERVICE_DIR / f"{_SERVICE_NAME}.service"
@@ -121,7 +124,7 @@ def _build_service_unit(cfg: _cfg.GuardConfig) -> str:
         flags += ["--reconnect-signal", w.reconnect_signal]
     flags += ["--interval", str(w.poll_interval)]
 
-    exec_start = exec_path + (" " + " ".join(flags) if flags else "") + " watch"
+    exec_start = exec_path + " watch" + (" " + " ".join(flags) if flags else "")
 
     return f"""\
 [Unit]
@@ -140,6 +143,110 @@ StandardError=journal
 [Install]
 WantedBy=default.target
 """
+
+
+# ---------------------------------------------------------------------------
+# CUDA wheel lib discovery
+# ---------------------------------------------------------------------------
+
+def _discover_nvidia_wheel_libs(cfg: _cfg.GuardConfig) -> list[Path]:
+    """Return deduplicated nvidia wheel lib dirs from all configured environments.
+
+    Scans the interpreter running wsl-gpu-guard, the user site-packages, and
+    any venvs listed in cfg.cuda.extra_venvs.  Returns absolute Path objects
+    for every ``nvidia/*/lib/`` directory that exists.
+    """
+    search_roots: set[Path] = set()
+
+    sp_list = getattr(site, "getsitepackages", lambda: [])()
+    for p in sp_list:
+        search_roots.add(Path(p))
+    try:
+        user_sp = site.getusersitepackages()
+        if user_sp:
+            search_roots.add(Path(user_sp))
+    except Exception:
+        pass
+
+    for venv_root in cfg.cuda.extra_venvs:
+        venv_path = Path(venv_root)
+        candidates = [venv_path]
+        # If the user passed a project directory, also check for a .venv inside it
+        dot_venv = venv_path / ".venv"
+        if dot_venv.is_dir():
+            candidates.append(dot_venv)
+        for candidate in candidates:
+            for sp in candidate.glob("lib/python*/site-packages"):
+                search_roots.add(sp)
+
+    found: list[Path] = []
+    seen: set[Path] = set()
+    for sp in sorted(search_roots):
+        for lib_dir in sorted(sp.glob("nvidia/*/lib")):
+            if not lib_dir.is_dir():
+                continue
+            real = lib_dir.resolve()
+            if real not in seen:
+                seen.add(real)
+                found.append(lib_dir)
+
+    return found
+
+
+def _write_cuda_env_file(lib_dirs: list[Path]) -> None:
+    """Write (or replace) ~/.config/environment.d/cuda-wheels.conf."""
+    _CUDA_ENV_DIR.mkdir(parents=True, exist_ok=True)
+    if lib_dirs:
+        paths_str = ":".join(str(p) for p in lib_dirs)
+        ld_line = f"LD_LIBRARY_PATH={paths_str}:$LD_LIBRARY_PATH\n"
+    else:
+        ld_line = "# No nvidia wheel lib dirs found — LD_LIBRARY_PATH not set.\n"
+    content = "# Managed by wsl-gpu-guard cuda-setup — do not edit manually.\n" + ld_line
+    _CUDA_ENV_FILE.write_text(content, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: cuda-setup
+# ---------------------------------------------------------------------------
+
+def cmd_cuda_setup(args: argparse.Namespace) -> int:
+    cfg = _cfg.load()
+
+    venv_arg = getattr(args, "venv", None)
+    if venv_arg:
+        venv_path = str(Path(venv_arg).resolve())
+        if venv_path not in cfg.cuda.extra_venvs:
+            cfg.cuda.extra_venvs.append(venv_path)
+            _cfg.save_cuda_venvs(cfg.cuda.extra_venvs)
+            print(f"Added venv to config: {venv_path}")
+        else:
+            print(f"Venv already in config: {venv_path}")
+
+    lib_dirs = _discover_nvidia_wheel_libs(cfg)
+
+    if lib_dirs:
+        print(f"Found {len(lib_dirs)} nvidia wheel lib dir(s):")
+        for d in lib_dirs:
+            print(f"  {d}")
+    else:
+        print("No nvidia wheel lib dirs found.")
+        print(
+            "  Tip: install nvidia wheels (e.g. pip install nvidia-cublas-cu12)\n"
+            "       or pass --venv PATH to scan a specific environment."
+        )
+
+    _write_cuda_env_file(lib_dirs)
+    print(f"Wrote {_CUDA_ENV_FILE}")
+
+    if lib_dirs:
+        export_str = ":".join(str(d) for d in lib_dirs)
+        print(
+            f"\nTo apply in the current shell:\n"
+            f"  export LD_LIBRARY_PATH={export_str}:$LD_LIBRARY_PATH\n"
+            "New systemd user sessions will pick it up automatically."
+        )
+
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +505,11 @@ def cmd_install(args: argparse.Namespace) -> int:
     cfg_path = _cfg.write_default()
     print(f"Config    : {cfg_path}")
 
+    # CUDA wheel lib discovery (best-effort — non-fatal)
+    print("\n--- CUDA wheel lib setup ---")
+    cmd_cuda_setup(args)
+    print()
+
     # Systemd service
     svc_rc = cmd_install_service(args)
 
@@ -545,6 +657,18 @@ def _build_parser() -> argparse.ArgumentParser:
     subs.add_parser("uninstall-task",
                     help="Remove the Windows Task Scheduler task")
 
+    # cuda-setup
+    cuda_p = subs.add_parser(
+        "cuda-setup",
+        help="Discover nvidia wheel lib dirs and write ~/.config/environment.d/cuda-wheels.conf",
+    )
+    cuda_p.add_argument(
+        "--venv",
+        metavar="PATH",
+        default=None,
+        help="Venv root to add to the scan (stored in config for future runs)",
+    )
+
     return parser
 
 
@@ -567,6 +691,7 @@ def main(argv: list[str] | None = None) -> None:
         "uninstall-service": cmd_uninstall_service,
         "install-task": cmd_install_task,
         "uninstall-task": cmd_uninstall_task,
+        "cuda-setup": cmd_cuda_setup,
     }
 
     sys.exit(handlers[args.command](args))

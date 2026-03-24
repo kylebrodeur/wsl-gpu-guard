@@ -15,6 +15,10 @@ holding an open CUDA context at that moment will crash — taking WSL2 down with
    device disappears unexpectedly (driver crash, sleep, etc.).
 3. **Safely** — by default the watchdog sends **SIGHUP** (not SIGTERM), so a well-behaved
    server falls back to CPU and keeps running rather than dying.
+4. **Portably** — `cuda-setup` discovers nvidia wheel lib directories across your Python
+   environments and writes `~/.config/environment.d/cuda-wheels.conf` so that
+   `libcublas.so.12` is always on `LD_LIBRARY_PATH` for every new session — no
+   per-project path hacks needed.
 
 ---
 
@@ -45,12 +49,12 @@ wsl --shutdown
 ## Installation
 
 ```bash
-# From the repo root
-uv sync
-uv run wsl-gpu-guard --version
+pip install wsl-gpu-guard
+# or
+uv tool install wsl-gpu-guard
 ```
 
-To install as a system tool (available everywhere in your WSL2 session):
+To install from the repo:
 
 ```bash
 uv tool install .
@@ -69,8 +73,10 @@ wsl-gpu-guard install
 
 This single command:
 1. Writes a default config to `~/.config/wsl-gpu-guard/config.toml`
-2. Installs and enables a **systemd user service** that starts the watchdog automatically on every WSL2 boot
-3. Registers a **Windows Task Scheduler task** that fires `on-ac-disconnect.ps1` on AC unplug and sleep
+2. Discovers nvidia wheel lib dirs across your Python environments and writes
+   `~/.config/environment.d/cuda-wheels.conf` so `libcublas.so.12` is available globally
+3. Installs and enables a **systemd user service** that starts the watchdog automatically on every WSL2 boot
+4. Registers a **Windows Task Scheduler task** that fires `on-ac-disconnect.ps1` on AC unplug and sleep
 
 ### Check everything
 
@@ -148,7 +154,7 @@ uv sync --extra dev
 uv run pytest tests/ -v
 ```
 
-All 55 tests run in under a second and require no GPU or WSL2-specific environment.
+All 71 tests run in under a second and require no GPU or WSL2-specific environment.
 
 ### Verify the installation
 
@@ -227,7 +233,7 @@ within a second.
 ### Check GPU-using PIDs
 
 ```bash
-uv run python -c "from wsl_gpu_guard.watchdog import get_gpu_using_pids; print(get_gpu_using_pids())"
+python -c "from wsl_gpu_guard.watchdog import get_gpu_using_pids; print(get_gpu_using_pids())"
 ```
 
 Returns a list of PIDs with `/dev/dxg` open. Should include any running CUDA processes and
@@ -258,8 +264,8 @@ journalctl --user -u wsl-gpu-guard -f
 
 ### `wsl-gpu-guard install`
 
-Full one-time setup: write config, install systemd user service, register Windows Task
-Scheduler task. Safe to re-run.
+Full one-time setup: write config, run `cuda-setup`, install systemd user service, register
+Windows Task Scheduler task. Safe to re-run.
 
 ### `wsl-gpu-guard uninstall`
 
@@ -269,6 +275,23 @@ Stop and remove the systemd service and Windows task. Config file is kept.
 
 Show `/dev/dxg` presence, GPU-using PIDs, service state, Windows task state, and RTLD_GLOBAL
 warnings for the current process.
+
+### `wsl-gpu-guard cuda-setup [--venv PATH]`
+
+Discover nvidia wheel lib dirs across configured Python environments and write
+`~/.config/environment.d/cuda-wheels.conf`. Systemd user sessions pick this up
+automatically so every process has `libcublas.so.12` on `LD_LIBRARY_PATH` without
+per-project path hacks.
+
+| Option | Description |
+|--------|-------------|
+| `--venv PATH` | Add this venv root (or project directory containing `.venv`) to the scan. Stored in `~/.config/wsl-gpu-guard/config.toml` for future runs. |
+
+Re-run after installing new Python environments:
+
+```bash
+wsl-gpu-guard cuda-setup --venv ~/projects/my-ml-project
+```
 
 ### `wsl-gpu-guard config [--init]`
 
@@ -356,22 +379,14 @@ cause the GPU to crash.
 `wsl-gpu-guard status` and `wsl-gpu-guard watch` (at startup) both check for this
 condition using `RTLD_NOLOAD | RTLD_GLOBAL` probing and log a warning with a fix hint.
 
-**The fix** — instead of loading CUDA libs with `RTLD_GLOBAL`, prepend the lib directories
-to `LD_LIBRARY_PATH` before any CUDA operations:
+**The fix** — run `wsl-gpu-guard cuda-setup` once (or during `install`). This writes
+`~/.config/environment.d/cuda-wheels.conf` so that nvidia wheel lib dirs are on
+`LD_LIBRARY_PATH` at process startup. You can then load CUDA libraries by name without
+`RTLD_GLOBAL`:
 
 ```python
-import os, site
-from pathlib import Path
-
-def prepend_cuda_wheel_paths() -> None:
-    lib_dirs = []
-    for root in site.getsitepackages() + [site.getusersitepackages()]:
-        for lib_dir in (Path(root) / "nvidia").glob("*/lib"):
-            if lib_dir.is_dir():
-                lib_dirs.append(str(lib_dir.resolve()))
-    if lib_dirs:
-        current = os.environ.get("LD_LIBRARY_PATH", "")
-        os.environ["LD_LIBRARY_PATH"] = ":".join(lib_dirs) + (f":{current}" if current else "")
+import ctypes
+ctypes.CDLL("libcublas.so.12")   # works — no RTLD_GLOBAL needed
 ```
 
 ---
@@ -396,28 +411,6 @@ ctranslate2 / faster-whisper / your application
 **Do NOT install** `nvidia-driver`, `cuda-drivers`, or any package that installs a Linux
 NVIDIA kernel module inside WSL2. The Windows driver handles everything. Installing a Linux
 driver will conflict with the WSL2 bridge and cause crashes.
-
----
-
-## Publishing to PyPI
-
-```bash
-# Build
-uv build
-
-# Upload (requires PyPI account + API token)
-uv publish --token $PYPI_TOKEN
-```
-
-Once published, users install and set up with:
-
-```bash
-pip install wsl-gpu-guard
-# or
-uv tool install wsl-gpu-guard
-
-wsl-gpu-guard install
-```
 
 ---
 
@@ -473,3 +466,9 @@ If the PID file exists but the process is gone, the watchdog crashed — check l
 ```bash
 journalctl --user -u wsl-gpu-guard -n 50
 ```
+
+### `libcublas.so.12` not found / CUDA falls back to CPU
+
+Run `wsl-gpu-guard cuda-setup --venv /path/to/your/project` (pass your project directory
+or its `.venv`). Then open a new terminal — the env file is picked up automatically by
+systemd for all new user sessions. No export or sourcing required.

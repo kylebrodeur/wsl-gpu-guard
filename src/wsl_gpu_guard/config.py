@@ -40,8 +40,14 @@ class WatchConfig:
 
 
 @dataclass
+class CudaConfig:
+    extra_venvs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class GuardConfig:
     watch: WatchConfig = field(default_factory=WatchConfig)
+    cuda: CudaConfig = field(default_factory=CudaConfig)
 
 
 def load() -> GuardConfig:
@@ -63,7 +69,48 @@ def load() -> GuardConfig:
         poll_interval=float(watch_raw.get("poll_interval", 2.0)),
         pids=list(watch_raw.get("pids", [])),
     )
-    return GuardConfig(watch=watch)
+    cuda_raw = raw.get("cuda", {})
+    cuda = CudaConfig(
+        extra_venvs=list(cuda_raw.get("extra_venvs", [])),
+    )
+    return GuardConfig(watch=watch, cuda=cuda)
+
+
+def save_cuda_venvs(venvs: list[str]) -> None:
+    """Persist an updated extra_venvs list into the [cuda] section of CONFIG_FILE.
+
+    Creates the config file (via write_default) if it does not yet exist.
+    Replaces the [cuda] block in-place so that [watch] comments are preserved.
+    """
+    write_default()  # idempotent — creates file only if absent
+    text = CONFIG_FILE.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+
+    array = "[" + ", ".join(f'"{v}"' for v in venvs) + "]"
+    new_block = f"[cuda]\nextra_venvs = {array}\n"
+
+    # Find the [cuda] section, if present
+    cuda_start: int | None = None
+    cuda_end: int | None = None
+    for i, line in enumerate(lines):
+        if line.strip() == "[cuda]":
+            cuda_start = i
+        elif cuda_start is not None and line.strip().startswith("[") and i > cuda_start:
+            cuda_end = i
+            break
+
+    if cuda_start is not None:
+        end = cuda_end if cuda_end is not None else len(lines)
+        lines[cuda_start:end] = [new_block]
+    else:
+        # Append, with a blank line separator if the file doesn't end with one
+        if lines and not lines[-1].endswith("\n"):
+            lines.append("\n")
+        lines.append("\n" + new_block)
+
+    tmp = CONFIG_FILE.with_suffix(".toml.tmp")
+    tmp.write_text("".join(lines), encoding="utf-8")
+    tmp.replace(CONFIG_FILE)
 
 
 def write_default() -> Path:
@@ -94,6 +141,12 @@ poll_interval = 2.0
 
 # Explicit PIDs to signal (overrides gpu_only).
 # pids = [1234, 5678]
+
+[cuda]
+# Additional venv roots to scan for nvidia wheel lib dirs.
+# Run 'wsl-gpu-guard cuda-setup --venv PATH' to add an entry here.
+# extra_venvs = ["/home/user/projects/myapp"]
+extra_venvs = []
 """,
         encoding="utf-8",
     )
