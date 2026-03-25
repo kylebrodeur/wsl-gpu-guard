@@ -300,6 +300,18 @@ def cmd_status(args: argparse.Namespace) -> int:
             "  Fix: use LD_LIBRARY_PATH instead of ctypes.CDLL(..., mode=RTLD_GLOBAL)."
         )
 
+    # WSL_INTEROP check — missing from systemd user environment breaks VS Code
+    r = _systemctl(["show-environment"])
+    if "WSL_INTEROP=" not in r.stdout:
+        print(
+            "\n[WARNING] WSL_INTEROP is not set in the systemd user environment.\n"
+            "  VS Code remote and Windows interop may hang or fail.\n"
+            "  Fix: add to ~/.zshrc (before oh-my-zsh):\n"
+            "    if [[ -n \"$WSL_INTEROP\" ]]; then\n"
+            "        systemctl --user import-environment WSL_INTEROP\n"
+            "    fi"
+        )
+
     return 0 if present else 1
 
 
@@ -533,6 +545,18 @@ def cmd_install(args: argparse.Namespace) -> int:
         print(
             "  To install later from a WSL2 environment:\n"
             "    wsl-gpu-guard install-task"
+        )
+
+    # Warn if WSL_INTEROP is missing from systemd — catches the VS Code hang early
+    r = _systemctl(["show-environment"])
+    if _systemd_available() and "WSL_INTEROP=" not in r.stdout:
+        print(
+            "\n[WARNING] WSL_INTEROP is not set in the systemd user environment.\n"
+            "  VS Code remote may hang. Fix: add to ~/.zshrc (before oh-my-zsh):\n"
+            "    if [[ -n \"$WSL_INTEROP\" ]]; then\n"
+            "        systemctl --user import-environment WSL_INTEROP\n"
+            "    fi\n"
+            "  Then run: systemctl --user import-environment WSL_INTEROP"
         )
 
     if svc_rc != 0 or task_rc != 0:

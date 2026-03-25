@@ -13,6 +13,12 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.2.1] – 2026-03-24
 
+### Added
+
+- `status` and `install` now warn if `WSL_INTEROP` is missing from the
+  systemd user environment, which causes VS Code remote to hang silently.
+  Includes the exact `.zshrc` fix to print.
+
 ### Fixed
 
 - `uninstall` now removes `~/.config/environment.d/cuda-wheels.conf` and
