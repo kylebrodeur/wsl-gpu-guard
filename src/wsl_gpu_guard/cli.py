@@ -194,11 +194,16 @@ def _discover_nvidia_wheel_libs(cfg: _cfg.GuardConfig) -> list[Path]:
 
 
 def _write_cuda_env_file(lib_dirs: list[Path]) -> None:
-    """Write (or replace) ~/.config/environment.d/cuda-wheels.conf."""
+    """Write (or replace) ~/.config/environment.d/cuda-wheels.conf.
+
+    Does NOT append :$LD_LIBRARY_PATH — if LD_LIBRARY_PATH is unset when
+    systemd expands the file, a trailing colon would be produced, which
+    causes the dynamic linker to search the current working directory.
+    """
     _CUDA_ENV_DIR.mkdir(parents=True, exist_ok=True)
     if lib_dirs:
         paths_str = ":".join(str(p) for p in lib_dirs)
-        ld_line = f"LD_LIBRARY_PATH={paths_str}:$LD_LIBRARY_PATH\n"
+        ld_line = f"LD_LIBRARY_PATH={paths_str}\n"
     else:
         ld_line = "# No nvidia wheel lib dirs found — LD_LIBRARY_PATH not set.\n"
     content = "# Managed by wsl-gpu-guard cuda-setup — do not edit manually.\n" + ld_line
@@ -242,7 +247,7 @@ def cmd_cuda_setup(args: argparse.Namespace) -> int:
         export_str = ":".join(str(d) for d in lib_dirs)
         print(
             f"\nTo apply in the current shell:\n"
-            f"  export LD_LIBRARY_PATH={export_str}:$LD_LIBRARY_PATH\n"
+            f"  export LD_LIBRARY_PATH={export_str}\n"
             "New systemd user sessions will pick it up automatically."
         )
 

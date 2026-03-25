@@ -298,7 +298,7 @@ class TestWriteCudaEnvFile:
         ):
             _write_cuda_env_file([Path("/a/lib"), Path("/b/lib")])
         text = (tmp_path / "cuda-wheels.conf").read_text()
-        assert "LD_LIBRARY_PATH=/a/lib:/b/lib:$LD_LIBRARY_PATH" in text
+        assert "LD_LIBRARY_PATH=/a/lib:/b/lib\n" in text
 
     def test_no_broken_empty_prefix_when_no_dirs(self, tmp_path):
         with (
