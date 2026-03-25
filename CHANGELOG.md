@@ -11,6 +11,23 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ---
 
+## [0.2.1] – 2026-03-24
+
+### Fixed
+
+- `uninstall` now removes `~/.config/environment.d/cuda-wheels.conf` and
+  clears `LD_LIBRARY_PATH` from the live systemd user session so no stale
+  paths remain after removal.
+- `uninstall-service` now removes `/tmp/.wsl-gpu-guard.pid` if it exists
+  after stopping the service, preventing the Windows PowerShell script from
+  sending SIGUSR1 to an unrelated process on a stale PID.
+- `cuda-setup` no longer appends `:$LD_LIBRARY_PATH` to the env file value.
+  When `LD_LIBRARY_PATH` was unset in the systemd environment, the variable
+  expanded to an empty string, leaving a trailing colon that caused the
+  dynamic linker to search the current working directory.
+
+---
+
 ## [0.2.0] – 2026-03-24
 
 ### Added
@@ -66,6 +83,7 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - Systemd user service generation from current config (auto-restarts on failure).
 - PyPI-ready packaging: wheel bundles the PowerShell script; zero runtime deps.
 
-[Unreleased]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kylebrodeur/wsl-gpu-guard/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kylebrodeur/wsl-gpu-guard/releases/tag/v0.1.0

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wsl-gpu-guard"
-version = "0.2.0"
+version = "0.2.1"
 description = "Graceful GPU hot-removal protection for WSL2 on NVIDIA Optimus (hybrid graphics) laptops"
 readme = "README.md"
 license = { text = "MIT" }

@@ -414,6 +414,12 @@ def cmd_uninstall_service(args: argparse.Namespace) -> int:
         _SERVICE_FILE.unlink()
         print(f"Removed {_SERVICE_FILE}")
     _systemctl(["daemon-reload"])
+    # Clean up PID file in case the watchdog exited uncleanly — a stale PID
+    # file would cause the Windows script to SIGUSR1 an unrelated process.
+    pid_file = Path("/tmp/.wsl-gpu-guard.pid")
+    if pid_file.exists():
+        pid_file.unlink(missing_ok=True)
+        print(f"Removed {pid_file}")
     print(f"Service '{_SERVICE_NAME}' removed.")
     return 0
 
@@ -553,6 +559,15 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
     cmd_uninstall_service(args)
     if shutil.which("powershell.exe"):
         cmd_uninstall_task(args)
+
+    # Remove the CUDA env file and clear LD_LIBRARY_PATH from the live session
+    # so processes started in this session aren't left with stale paths.
+    if _CUDA_ENV_FILE.exists():
+        _CUDA_ENV_FILE.unlink()
+        print(f"Removed {_CUDA_ENV_FILE}")
+        _systemctl(["daemon-reload"])
+        _systemctl(["unset-environment", "LD_LIBRARY_PATH"])
+
     print("\nwsl-gpu-guard has been removed.")
     print(f"Config file kept at {_cfg.CONFIG_FILE} — delete manually if desired.")
     return 0
